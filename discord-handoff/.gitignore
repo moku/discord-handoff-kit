@@ -1,0 +1,22 @@
+# Local credentials (use env vars OR uncomment if you want to gitignore this file)
+# handoff_config.py
+
+# Daemon logs (per-thread)
+logs/
+*.log
+
+# Downloaded attachments (per-thread or flat)
+attachments/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+__pycache__/

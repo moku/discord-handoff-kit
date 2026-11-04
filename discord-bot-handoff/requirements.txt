@@ -1,0 +1,3 @@
+discord.py>=2.3
+aiosqlite>=0.19
+# aiohttp is pulled in transitively by discord.py and used by local_llm.py.

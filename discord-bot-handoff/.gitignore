@@ -1,0 +1,12 @@
+# Secrets — never commit the real env file
+discord.env
+*.env
+!discord.env.example
+
+# State / DB
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.pyc
