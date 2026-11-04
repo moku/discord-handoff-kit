@@ -18,6 +18,11 @@ _TO_CLAUDE_EXACT = {"클로드", "claude"}
 _TO_LOCAL_EXACT = {"local", "로컬"}
 
 
+def is_switch_word(content: str) -> bool:
+    """True if the whole message is a trigger word, whichever direction it goes."""
+    return content.strip().lower() in _TO_CLAUDE_EXACT | _TO_LOCAL_EXACT
+
+
 def detect_switch(content: str, active: str) -> str | None:
     """Return 'to_claude' / 'to_local' / None.
 

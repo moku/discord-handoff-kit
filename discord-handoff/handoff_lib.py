@@ -15,9 +15,10 @@ Usage as CLI:
   py -X utf8 handoff_lib.py send --target <id> --file foo.md --file bar.png
   py -X utf8 handoff_lib.py create-thread --parent <channel_id> --name "..." --starter "..."
   py -X utf8 handoff_lib.py fetch-attachment --url <cdn_url> [--out path]
+  py -X utf8 handoff_lib.py history --target <channel_or_thread_id> [--limit 20] [--before <msg_id>] [--max-chars N]
 
 Usage as library:
-  from handoff_lib import send, create_thread, fetch_attachment
+  from handoff_lib import send, create_thread, fetch_attachment, fetch_history
 """
 from __future__ import annotations
 import json
@@ -193,7 +194,7 @@ def _post_multipart(path: str, payload_json: dict, files: list[tuple[str, bytes]
             return data
 
 
-def _get(path: str, token: str | None = None) -> dict:
+def _get(path: str, token: str | None = None, _retries: int = 3) -> dict:
     token = token or _resolve_token()
     if not token:
         return {"ok": False, "error": "no DISCORD_BOT_TOKEN available"}
@@ -205,21 +206,78 @@ def _get(path: str, token: str | None = None) -> dict:
             "User-Agent": "Vault-Handoff (0.1)",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read().decode("utf-8")
-            data = json.loads(raw) if raw else {}
-            data["ok"] = True
-            return data
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
+    for attempt in range(_retries + 1):
         try:
-            data = json.loads(raw)
-        except Exception:
-            data = {"error": raw}
-        data["_http_status"] = e.code
-        data["ok"] = False
-        return data
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8")
+                data = json.loads(raw) if raw else {}
+                if isinstance(data, list):
+                    return {"ok": True, "items": data}
+                data["ok"] = True
+                return data
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {"error": raw}
+            if e.code == 429 and attempt < _retries:
+                try:
+                    delay = float(data.get("retry_after", 1.0))
+                except (TypeError, ValueError, AttributeError):
+                    delay = 1.0
+                time.sleep(min(delay, 10.0) + 0.1)
+                continue
+            data["_http_status"] = e.code
+            data["ok"] = False
+            return data
+
+
+def _format_history_line(message: dict, max_chars: int | None = None) -> str:
+    author = message["author"]
+    text = message.get("content", "")
+    if max_chars is not None and len(text) > max_chars:
+        text = f"{text[:max_chars]}…(+{len(text) - max_chars}자)"
+    line = (f"[{message['timestamp'][:16]}] {author.get('global_name') or author['username']}"
+            f"{' (bot)' if author.get('bot') else ''} msg={message['id']}: {text}")
+    attachments = message.get("attachments", [])
+    if attachments:
+        line += " [첨부: " + ", ".join(
+            f"{item['filename']} ({item['url']})" for item in attachments
+        ) + "]"
+    return line
+
+
+def fetch_history(channel_id: str | int, limit: int = 20, before: str | None = None,
+                  max_chars: int | None = None, token: str | None = None) -> dict:
+    """Return one page of channel or thread messages in oldest-first readable lines."""
+    path = f"/channels/{channel_id}/messages?limit={min(limit, 100)}"
+    if before is not None:
+        path += f"&before={before}"
+    result = _get(path, token=token)
+    if not result.get("ok") or "items" not in result:
+        reason = result.get("error") or result.get("message")
+        if not reason and "_http_status" in result:
+            reason = f"HTTP {result['_http_status']}"
+        return {"ok": False, "error": str(reason or "response has no items")}
+    return {"ok": True, "lines": [
+        _format_history_line(message, max_chars) for message in reversed(result["items"])
+    ]}
+
+
+def _cli_history(args) -> int:
+    if args.limit > 100:
+        print("history: 100건만 조회합니다. 이전 기록은 --before 를 사용하세요.", file=sys.stderr)
+    result = fetch_history(args.target, limit=args.limit, before=args.before,
+                           max_chars=args.max_chars)
+    if not result["ok"]:
+        print(result["error"], file=sys.stderr)
+        return 1
+    if not result["lines"]:
+        print("history: no messages", file=sys.stderr)
+    for line in result["lines"]:
+        print(line)
+    return 0
 
 
 def _split_chunks(text: str, limit: int = MSG_MAX) -> list[str]:
@@ -397,6 +455,12 @@ if __name__ == "__main__":
     p_att.add_argument("--url", required=True, help="Discord CDN URL from a message attachment.")
     p_att.add_argument("--out", help="Output path. Default: ./attachments/<filename>.")
 
+    p_hist = sub.add_parser("history", help="Read channel or thread message history.")
+    p_hist.add_argument("--target", required=True, help="Channel or thread ID.")
+    p_hist.add_argument("--limit", type=int, default=20, help="Messages to fetch (max 100).")
+    p_hist.add_argument("--before", help="Fetch messages before this message ID.")
+    p_hist.add_argument("--max-chars", type=int, default=None, help="Truncate message text.")
+
     args = ap.parse_args()
 
     if args.cmd == "send":
@@ -423,3 +487,6 @@ if __name__ == "__main__":
         res = fetch_attachment(args.url, out=args.out)
         print(json.dumps(res, ensure_ascii=False))
         sys.exit(0 if res.get("ok") else 1)
+
+    if args.cmd == "history":
+        sys.exit(_cli_history(args))

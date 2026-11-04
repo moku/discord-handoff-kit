@@ -30,6 +30,7 @@ import logging
 import discord
 
 import supervisor
+import thread_context
 from config import Config
 from local_llm import LocalLLM, LocalLLMError
 from parser import detect_switch
@@ -166,6 +167,8 @@ class HandoffBot(discord.Client):
                 "🔧 **Claude Code 연결됨.** 잠시 후 Claude가 인사할 거예요. "
                 "파일·스크린샷 첨부 가능. `local`이라고만 보내면 로컬 모델로 돌아옵니다."
             )
+            if not result.reused:
+                await self._inject_thread_context(thread_id, channel)
             return
 
         if result.status == "login_required":
@@ -191,6 +194,66 @@ class HandoffBot(discord.Client):
             if len(snippet) > 1700:
                 snippet = "…\n" + snippet[-1700:]
             await channel.send(f"```\n{snippet}\n```")
+
+    async def _inject_thread_context(
+        self, thread_id: str, channel: discord.abc.Messageable
+    ) -> None:
+        """Hand the thread's title and earlier messages to the new session."""
+        authorized = self._cfg.authorized_user_id
+        if authorized is None:
+            await channel.send(
+                "⚠️ DISCORD_AUTHORIZED_USER_ID 가 없어 이전 대화를 Claude 세션에 넘기지 않았어요."
+            )
+            return
+        try:
+            starter = await self._fetch_starter(channel, thread_id)
+            recent = [
+                self._to_context_message(message)
+                async for message in channel.history(limit=thread_context.CONTEXT_FETCH_LIMIT)
+            ]
+            ctx = thread_context.build_thread_context(
+                thread_id=thread_id,
+                title=getattr(channel, "name", ""),
+                starter=self._to_context_message(starter) if starter else None,
+                recent=recent,
+                bot_user_id=self.user.id,
+                authorized_user_id=authorized,
+            )
+            injected = await supervisor.inject_message(thread_id, ctx.body)
+        except Exception as exc:  # noqa: BLE001 — the session still works without context
+            log.exception("thread context failed for thread=%s", thread_id)
+            await channel.send(f"⚠️ 이전 대화를 Claude 세션에 넘기지 못했어요({exc}).")
+            return
+        if not injected:
+            await channel.send("⚠️ 이전 대화를 Claude 세션에 넘기지 못했어요(tmux).")
+            return
+        await channel.send(f"{thread_context.CONTEXT_POST_PREFIX} 맥락 전달: 메시지 {ctx.message_count}개")
+
+    @staticmethod
+    async def _fetch_starter(
+        channel: discord.abc.Messageable, thread_id: str
+    ) -> discord.Message | None:
+        """A forum thread's first post shares its id; other threads keep it on the parent."""
+        for source in (channel, getattr(channel, "parent", None)):
+            fetch_message = getattr(source, "fetch_message", None)
+            if fetch_message is None:
+                continue
+            try:
+                return await fetch_message(int(thread_id))
+            except discord.HTTPException:
+                continue
+        return None
+
+    @staticmethod
+    def _to_context_message(message: discord.Message) -> thread_context.ContextMessage:
+        return thread_context.ContextMessage(
+            message_id=str(message.id),
+            author_id=message.author.id,
+            author_is_bot=message.author.bot,
+            created_at=message.created_at,
+            content=message.content,
+            attachments=tuple((item.filename, item.url) for item in message.attachments),
+        )
 
     async def _switch_to_local(
         self, thread_id: str, channel: discord.abc.Messageable

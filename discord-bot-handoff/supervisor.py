@@ -29,6 +29,7 @@ import asyncio
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -73,7 +74,9 @@ _DEFAULT_HANDOFF_PROMPT = (
     "봇 토큰과 인증 유저ID는 환경변수에 이미 설정돼 있어. ready 이벤트가 뜨면 한국어로 짧게 인사해. "
     "이후 사용자 메시지(첨부·스크린샷 포함 — attachments의 url을 내려받아 Read로 확인)에 대화형으로 "
     "응답하고, 필요하면 셸/도구로 실제 작업(설치·빌드·실행 등)을 끝까지 진행해. "
-    "세션이 종료될 때까지 계속 청취해."
+    "세션이 종료될 때까지 계속 청취해. "
+    "사용자가 다른 스레드를 제목·멘션·링크로 가리키면 ~/.claude/skills/thread-context/SKILL.md 를 읽고 "
+    "그 절차(찾기 → 살아 있는 세션에 묻기 → 없으면 기록 읽기)를 따라."
 )
 HANDOFF_PROMPT = os.environ.get("HANDOFF_PROMPT", _DEFAULT_HANDOFF_PROMPT)
 
@@ -116,6 +119,7 @@ class SpawnResult:
     ok: bool
     status: Literal["ok", "login_required", "boot_timeout", "spawn_failed"]
     reason: str = ""
+    reused: bool = False  # True when an already-running session was kept
     pane_excerpt: str = ""
 
 
@@ -154,6 +158,34 @@ def _excerpt(pane: str, max_lines: int = 30, max_chars: int = 1400) -> str:
     if len(excerpt) > max_chars:
         excerpt = "…\n" + excerpt[-max_chars:]
     return excerpt
+
+
+async def inject_message(thread_id: str, body: str) -> bool:
+    """Paste multi-line text into the thread's session as one input, then submit.
+
+    A bracketed paste keeps newlines from submitting the message line by line,
+    which is what plain `send-keys` would do.
+    """
+    name = _session_name(thread_id)
+    buffer_name = f"handoff-inject-{name}-{time.monotonic_ns()}"
+    load = await asyncio.create_subprocess_exec(
+        "tmux", "load-buffer", "-b", buffer_name, "-",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await load.communicate(body.encode("utf-8"))
+    if load.returncode != 0:
+        return False
+    paste = await asyncio.create_subprocess_exec(
+        "tmux", "paste-buffer", "-p", "-d", "-b", buffer_name, "-t", name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await paste.wait() != 0:
+        return False
+    await asyncio.sleep(1.5)  # submit separately, for the same reason as the boot prompt
+    return await _send_keys(name, "Enter")
 
 
 async def responder_alive(thread_id: str) -> bool:
@@ -255,7 +287,7 @@ async def spawn_claude_handoff(thread_id: str) -> SpawnResult:
         if await responder_alive(thread_id):
             # Already running — treat as success. (Caller can stop_responder
             # first if they want a fresh boot.)
-            return SpawnResult(ok=True, status="ok", reason="already running")
+            return SpawnResult(ok=True, status="ok", reason="already running", reused=True)
 
         # Source env file (secrets) into the session, then exec claude. Keeps
         # secrets out of argv — `tmux new-session -e VAR=value` would expose

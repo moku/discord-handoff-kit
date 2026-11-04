@@ -19,6 +19,16 @@ CWD / PATHS:
 - All examples below use relative paths.
 - Python: always `py -X utf8 <script>` on Windows, `python -X utf8` elsewhere.
 
+To read any channel or thread, run:
+```
+py -X utf8 handoff_lib.py history --target <channel_or_thread_id> [--limit 20] [--before <msg_id>] [--max-chars N]
+```
+It prints human-readable messages from oldest to newest, including attachment
+filenames and URLs. One request returns at most 100 messages; pass the oldest
+message ID as `--before` to read an earlier page. Full message text is the
+default; `--max-chars` truncates it. This is the canonical thread history
+lookup, reused by thread-context.
+
 ════════════════════════════════════════════════════════
 INPUTS — handle whatever the user gave
 ════════════════════════════════════════════════════════
