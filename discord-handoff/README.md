@@ -57,16 +57,16 @@ pip install --user -r requirements.txt   # or: py -m pip install --user discord.
 ### 3. Smoke test
 
 ```bash
-py -X utf8 handoff_lib.py send --target <parent_channel_id> --text "✅ test"
+python3 handoff_lib.py send --target <parent_channel_id> --text "✅ test"
 ```
 Message should appear in Discord.
 
 ## Usage from Claude Code
 
-Open Claude Code, set cwd to this repo, and paste:
+With the skill installed, say this in Claude Code:
 
 ```
-Read discord-handoff.md and execute. parent_channel_id: <YOUR_CHANNEL_ID>
+hand this off to Discord, parent channel <YOUR_CHANNEL_ID>
 ```
 
 Optional extras:
@@ -104,7 +104,7 @@ in inject mode the bot keeps delivering into the live session).
   in the Monitor branch only)
 - Auto-reconnects on transient disconnects (handled by discord.py)
 
-**`discord-handoff.md`** — The SKILL prompt. Tells Claude Code how to:
+**`SKILL.md`** — The SKILL prompt. Tells Claude Code how to:
 - Create the thread, post intro, pick the receive branch (Monitor branch starts
   the daemon under Monitor; inject mode starts no listener)
 - Process each user message as open-ended conversation (NOT fixed commands)
