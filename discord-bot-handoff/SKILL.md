@@ -1,6 +1,6 @@
 ---
 name: discord-bot-handoff
-description: 로컬 LLM으로 응답하는 Discord 봇에 "claude 한 단어 → Claude Code tmux 세션으로 에스컬레이션" 기능을 더한 실행 가능한 레퍼런스 봇. 다른 환경(OpenAI 호환 endpoint만 있으면)으로 이식 가능. "디스코드 봇 띄워줘", "핸드오프 봇 실행", "run the handoff bot", "로컬 LLM 디스코드 봇" 같은 발화에서 셋업/실행. discord-handoff 스킬 위에 얹혀 동작.
+description: LLM(로컬·클라우드 OpenAI 호환, 없어도 됨)으로 응답하는 Discord 봇에 "claude 한 단어 → Claude Code tmux 세션으로 에스컬레이션" 기능을 더한 실행 가능한 레퍼런스 봇. 다른 환경(OpenAI 호환 endpoint만 있으면)으로 이식 가능. "디스코드 봇 띄워줘", "핸드오프 봇 실행", "run the handoff bot", "로컬 LLM 디스코드 봇" 같은 발화에서 셋업/실행. discord-handoff 스킬 위에 얹혀 동작.
 ---
 
 # discord-bot-handoff
@@ -11,7 +11,8 @@ Claude Code 세션으로 넘기는" 에스컬레이션 레이어. [`discord-hand
 
 ## 동작 요약
 
-- 감시 채널/스레드에서 인증 유저가 메시지 → 로컬 LLM이 응답 (스레드별 최근 N턴 기억)
+- 감시 채널/스레드에서 인증 유저가 메시지 → LLM이 응답 (스레드별 최근 N턴 기억)
+- `LOCAL_LLM_BASE_URL` 을 비우면 Claude 전용 모드: 메시지가 오면 바로 Claude 세션을 띄우고 그 메시지를 넘긴다
 - 정확히 한 단어 `claude` / `클로드` → 그 스레드에 tmux Claude 세션 스폰, 봇은 침묵
 - 정확히 한 단어 `local` / `로컬` → Claude 세션 종료, 로컬 모델 복귀
 - Claude 세션이 죽으면 다음 메시지에서 자동으로 로컬 복귀
@@ -21,8 +22,9 @@ Claude Code 세션으로 넘기는" 에스컬레이션 레이어. [`discord-hand
 
 - `tmux`, `claude` CLI (PATH 또는 `CLAUDE_BIN`)
 - `~/.claude/skills/discord-handoff/` 설치 (짝 스킬)
-- OpenAI 호환 chat-completions endpoint 하나 (vLLM / mlx_lm.server / Ollama /
-  LM Studio / llama.cpp / OpenAI 등 — README "Swapping the LLM endpoint" 참고)
+- (선택) OpenAI 호환 chat-completions endpoint 하나 — 로컬(vLLM / mlx_lm.server / Ollama /
+  LM Studio / llama.cpp)이나 클라우드(OpenAI / OpenRouter / Gemini). 없으면 비워 둔다
+  (README "Pick a setup" 참고)
 - Discord 봇 토큰 + 인증 유저 id
 
 ## 셋업 & 실행

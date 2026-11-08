@@ -13,10 +13,14 @@ Flow per message (in a watched channel/thread, from the authorized user):
      thread directly. If that session has died (crash / host reboot), the next
      message auto-recovers the thread back to "local".
 
-  3. In "local" mode the bot answers with the local LLM (any OpenAI-compatible
-     endpoint), carrying a short per-thread history.
+  3. In "local" mode the bot answers with the LLM (any OpenAI-compatible
+     endpoint, local or cloud), carrying a short per-thread history.
 
-This bot brings ONLY the escalation layer + a local-LLM responder. Swap the
+  Claude-only mode: with `LOCAL_LLM_BASE_URL` left blank there is no LLM, so
+  any message in a thread without a live session spawns one and hands that
+  message to it.
+
+This bot brings ONLY the escalation layer + an LLM responder. Swap the
 LLM endpoint via env (see README). Config comes from `config.Config.from_env`.
 
 Run:  python -X utf8 bot.py
@@ -57,14 +61,15 @@ class HandoffBot(discord.Client):
             max_tokens=cfg.llm_max_tokens,
             temperature=cfg.llm_temperature,
             timeout_s=cfg.llm_timeout_s,
-        )
+        ) if cfg.llm_enabled else None
 
     async def setup_hook(self) -> None:
         await self._store.init()
 
     async def on_ready(self) -> None:
-        log.info("logged in as %s (watching channels=%s)",
-                 self.user, self._cfg.watched_channels or "ALL")
+        log.info("logged in as %s (watching channels=%s, llm=%s)",
+                 self.user, self._cfg.watched_channels or "ALL",
+                 self._cfg.llm_base_url or "none (claude-only)")
 
     # ── gating ────────────────────────────────────────────────────────────
 
@@ -109,17 +114,25 @@ class HandoffBot(discord.Client):
             if await supervisor.responder_alive(thread_id):
                 return  # the handoff daemon is replying
             await self._store.set_active(thread_id, "local")
+            if self._llm is None:
+                await message.channel.send("⚠️ Claude 세션이 종료된 것 같아 다시 연결할게요.")
+                await self._switch_to_claude(thread_id, message.channel, pending=message)
+                return
             await message.channel.send(
                 "⚠️ Claude 세션이 종료된 것 같아 로컬 모델로 돌아왔어요."
             )
             active = "local"
 
-        # 3. Local mode → answer with the local LLM.
+        # 3. Local mode → answer with the LLM, or with Claude when there is none.
+        if self._llm is None:
+            await self._switch_to_claude(thread_id, message.channel, pending=message)
+            return
         await self._reply_local(thread_id, message, content)
 
     async def _reply_local(
         self, thread_id: str, message: discord.Message, content: str
     ) -> None:
+        assert self._llm is not None
         try:
             await message.add_reaction("👀")
         except discord.HTTPException:
@@ -148,8 +161,12 @@ class HandoffBot(discord.Client):
     # ── switch helpers ────────────────────────────────────────────────────
 
     async def _switch_to_claude(
-        self, thread_id: str, channel: discord.abc.Messageable
+        self,
+        thread_id: str,
+        channel: discord.abc.Messageable,
+        pending: discord.Message | None = None,
     ) -> None:
+        """Spawn the thread's Claude session; `pending` is a message it should answer."""
         await channel.send("🔧 Claude를 부르는 중… (세션 준비에 ~25초)")
         try:
             result = await supervisor.spawn_claude_handoff(thread_id)
@@ -163,12 +180,19 @@ class HandoffBot(discord.Client):
 
         if result.ok:
             await self._store.set_active(thread_id, "claude")
+            back = (
+                "`local`이라고만 보내면 로컬 모델로 돌아옵니다."
+                if self._llm is not None
+                else "`local`이라고만 보내면 세션을 끝냅니다."
+            )
             await channel.send(
                 "🔧 **Claude Code 연결됨.** 잠시 후 Claude가 인사할 거예요. "
-                "파일·스크린샷 첨부 가능. `local`이라고만 보내면 로컬 모델로 돌아옵니다."
+                f"파일·스크린샷 첨부 가능. {back}"
             )
             if not result.reused:
-                await self._inject_thread_context(thread_id, channel)
+                await self._inject_thread_context(thread_id, channel, exclude=pending)
+            if pending is not None:
+                await self._inject_pending(thread_id, channel, pending)
             return
 
         if result.status == "login_required":
@@ -195,8 +219,20 @@ class HandoffBot(discord.Client):
                 snippet = "…\n" + snippet[-1700:]
             await channel.send(f"```\n{snippet}\n```")
 
+    async def _inject_pending(
+        self, thread_id: str, channel: discord.abc.Messageable, message: discord.Message
+    ) -> None:
+        """Hand the message that started the session to Claude as a normal request."""
+        lines = [f"[discord thread={thread_id} msg={message.id}]", message.content]
+        lines += [f"(첨부: {item.filename} {item.url})" for item in message.attachments]
+        if not await supervisor.inject_message(thread_id, "\n".join(lines)):
+            await channel.send("⚠️ 방금 메시지를 Claude 세션에 넘기지 못했어요. 한 번 더 보내 주세요.")
+
     async def _inject_thread_context(
-        self, thread_id: str, channel: discord.abc.Messageable
+        self,
+        thread_id: str,
+        channel: discord.abc.Messageable,
+        exclude: discord.Message | None = None,
     ) -> None:
         """Hand the thread's title and earlier messages to the new session."""
         authorized = self._cfg.authorized_user_id
@@ -210,6 +246,7 @@ class HandoffBot(discord.Client):
             recent = [
                 self._to_context_message(message)
                 async for message in channel.history(limit=thread_context.CONTEXT_FETCH_LIMIT)
+                if exclude is None or message.id != exclude.id
             ]
             ctx = thread_context.build_thread_context(
                 thread_id=thread_id,
@@ -258,12 +295,20 @@ class HandoffBot(discord.Client):
     async def _switch_to_local(
         self, thread_id: str, channel: discord.abc.Messageable
     ) -> None:
-        await channel.send("💬 로컬 모델로 돌아가는 중…")
+        await channel.send(
+            "💬 로컬 모델로 돌아가는 중…" if self._llm is not None else "💬 Claude 세션을 끝내는 중…"
+        )
         try:
             await supervisor.stop_responder(thread_id)
         except Exception:  # noqa: BLE001
             log.exception("handoff stop failed for thread=%s", thread_id)
         await self._store.set_active(thread_id, "local")
+        if self._llm is None:
+            await channel.send(
+                "💬 **Claude 세션을 끝냈어요.** LLM endpoint가 없어서 "
+                "다음 메시지를 보내면 Claude를 다시 연결합니다."
+            )
+            return
         await channel.send("💬 **로컬 모델로 전환됐어요.** (Claude 세션 종료)")
 
 

@@ -7,7 +7,7 @@ Three pieces. `thread-context` builds on `discord-handoff`; the bot needs both f
 | Folder | What it does | Needs |
 |---|---|---|
 | [`discord-handoff/`](discord-handoff/) | Claude Code **skill**: create a Discord thread for the current task, post progress, and receive your replies (listener daemon or bot-injected input). | Python 3.10+, `discord.py`, a Discord bot token |
-| [`discord-bot-handoff/`](discord-bot-handoff/) | Runnable **Discord bot**: answers with any OpenAI-compatible local LLM; type `claude` in a thread to escalate it to a tmux Claude Code session (which then uses `discord-handoff`). `local` switches back. | the above + `tmux`, `claude` CLI, an LLM endpoint |
+| [`discord-bot-handoff/`](discord-bot-handoff/) | Runnable **Discord bot**: answers with any OpenAI-compatible LLM (local or cloud); type `claude` in a thread to escalate it to a tmux Claude Code session (which then uses `discord-handoff`). `local` switches back. With no LLM configured, every thread goes straight to Claude. | the above + `tmux`, `claude` CLI; an LLM endpoint is optional |
 | [`thread-context/`](thread-context/) | Claude Code **skill**: read another Discord thread, or ask that thread's live Claude session directly. Read-only: it never posts there or gives that session work. | `discord-handoff`, plus `DISCORD_GUILD_ID` for title search |
 
 When the bot switches a thread to Claude, it also passes the thread title and earlier messages to the new session, so you can pick up mid-conversation. Only your own and the bot's messages are passed, and only when `DISCORD_AUTHORIZED_USER_ID` is set.
@@ -44,7 +44,7 @@ When the bot switches a thread to Claude, it also passes the thread title and ea
 
 - **Move a running session to Discord.** Claude Code keeps working on your machine, posts progress to a thread, and acts on what you reply from your phone or laptop.
 - **Send files both ways.** Claude can attach reports, logs and screenshots. Files you attach in the thread are downloaded so Claude can read them.
-- **Start Claude from a chat.** Run the optional bot: a local LLM answers by default, and typing `claude` in a thread starts a Claude Code session there with the thread's earlier messages as context.
+- **Start Claude from a chat.** Run the optional bot: an LLM of your choice answers by default, and typing `claude` in a thread starts a Claude Code session there with the thread's earlier messages as context. No LLM? Leave it unset and every thread talks to Claude directly.
 - **Reuse another thread's context.** Find a thread by title, mention or link. If its Claude session is still running, ask that session; otherwise read the message history.
 
 ## Usage
@@ -76,11 +76,13 @@ Start the bot (setup: [`discord-bot-handoff/README.md`](discord-bot-handoff/READ
 
 | You type | What happens |
 |---|---|
-| any message | The local LLM answers. |
+| any message | The LLM answers. |
 | `claude` or `클로드` | A tmux Claude Code session starts for this thread and takes over. The bot goes quiet. |
-| `local` or `로컬` | The Claude session is stopped and the local LLM answers again. |
+| `local` or `로컬` | The Claude session is stopped and the LLM answers again. |
 
-Only an exact one-word message switches modes, so mentioning "claude" in a sentence does nothing. If the Claude session dies, the next message returns the thread to the local LLM.
+Only an exact one-word message switches modes, so mentioning "claude" in a sentence does nothing. If the Claude session dies, the next message returns the thread to the LLM.
+
+Without an LLM (`LOCAL_LLM_BASE_URL` left blank), any message in a thread starts a Claude session and is handed to it; `local` just ends the session, and the next message starts a new one.
 
 ### Use another thread's context
 

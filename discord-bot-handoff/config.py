@@ -70,7 +70,8 @@ class Config:
     authorized_user_id: int | None       # only respond to this user (0/empty → anyone)
     watched_channels: set[int] = field(default_factory=set)  # empty → any watched-elsewhere channel is ignored
 
-    # ── Local LLM (OpenAI-compatible) ──
+    # ── LLM (any OpenAI-compatible endpoint, local or cloud) ──
+    # Empty base URL → no LLM: every thread goes straight to a Claude session.
     llm_base_url: str = "http://127.0.0.1:8000/v1"
     llm_model: str = "local-llm"
     llm_api_key: str = ""                 # bearer token if the endpoint needs one
@@ -82,6 +83,10 @@ class Config:
     # ── State ──
     store_path: str = os.path.expanduser("~/.local/share/discord-bot-handoff/state.db")
     history_turns: int = 8                # recent (user+assistant) turns fed to the LLM
+
+    @property
+    def llm_enabled(self) -> bool:
+        return bool(self.llm_base_url)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -99,7 +104,7 @@ class Config:
             bot_token=token,
             authorized_user_id=auth_id,
             watched_channels=_int_set(os.environ.get("WATCHED_CHANNELS", "")),
-            llm_base_url=os.environ.get("LOCAL_LLM_BASE_URL", cls.llm_base_url).rstrip("/"),
+            llm_base_url=os.environ.get("LOCAL_LLM_BASE_URL", cls.llm_base_url).strip().rstrip("/"),
             llm_model=os.environ.get("LOCAL_LLM_MODEL", cls.llm_model),
             llm_api_key=os.environ.get("LOCAL_LLM_API_KEY", cls.llm_api_key),
             llm_system_prompt=os.environ.get("LOCAL_LLM_SYSTEM_PROMPT", cls.llm_system_prompt),

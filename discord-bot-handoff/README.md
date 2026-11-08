@@ -1,7 +1,19 @@
 # discord-bot-handoff
 
-A **runnable reference Discord bot** that answers with a local LLM and lets you
+A **runnable reference Discord bot** that answers with an LLM and lets you
 escalate any thread to a full Claude Code session by typing one word.
+
+## Pick a setup
+
+| You have | Set | What the bot does |
+|---|---|---|
+| A local model server (vLLM, Ollama, LM Studio, mlx_lm, llama.cpp) | `LOCAL_LLM_BASE_URL` = its `/v1` URL, `LOCAL_LLM_MODEL` | Local model answers; `claude` escalates. |
+| A cloud API key (OpenAI, OpenRouter, Gemini, …) | `LOCAL_LLM_BASE_URL` = provider's OpenAI-compatible URL, `LOCAL_LLM_MODEL`, `LOCAL_LLM_API_KEY` | Cloud model answers; `claude` escalates. |
+| Only a Claude Code subscription | `LOCAL_LLM_BASE_URL=` (blank) | **Claude-only mode**: every thread goes straight to a Claude session. |
+
+The variables keep the `LOCAL_LLM_` prefix for compatibility, but any
+OpenAI-compatible endpoint works, local or cloud. See
+[Swapping the LLM endpoint](#swapping-the-llm-endpoint) for exact values.
 
 Type `claude` (or `클로드`) in a watched thread and the bot:
 
@@ -16,9 +28,10 @@ Having the bot type messages into the session pane instead (inject mode) is
 supported by the `discord-handoff` SKILL STEP 3 inject-mode branch and the
 marker `[handoff-inject-mode]`; this reference bot does not implement it.
 
-Everything else is answered by your **local LLM** — any OpenAI-compatible
-endpoint. No MAF / graph service / project framework required; the only backend
-assumption is one `/chat/completions` URL.
+Everything else is answered by your **LLM** — any OpenAI-compatible
+endpoint, local or cloud. No MAF / graph service / project framework required;
+the only backend assumption is one `/chat/completions` URL, and even that is
+optional (see Claude-only mode below).
 
 ```
 ┌────────── Discord thread ──────────┐
@@ -35,7 +48,7 @@ assumption is one `/chat/completions` URL.
 - The [discord-handoff](../discord-handoff/) skill installed at
   `~/.claude/skills/discord-handoff/`
 - Python 3.10+
-- One OpenAI-compatible chat endpoint (see below)
+- Optionally, one OpenAI-compatible chat endpoint, local or cloud (see below)
 - A Discord bot token + your Discord user id
 
 ## Setup
@@ -66,7 +79,7 @@ All config is read from the env file (`HANDOFF_ENV_FILE`, default
 | `DISCORD_BOT_TOKEN` | ✅ | Bot token. |
 | `DISCORD_AUTHORIZED_USER_ID` | | Only respond to this user. Blank = anyone. |
 | `WATCHED_CHANNELS` | | Comma/space-separated channel or parent ids. Blank = all visible. |
-| `LOCAL_LLM_BASE_URL` | | Endpoint base (default `http://127.0.0.1:8000/v1`). |
+| `LOCAL_LLM_BASE_URL` | | Endpoint base (default `http://127.0.0.1:8000/v1`). Set it blank for Claude-only mode. |
 | `LOCAL_LLM_MODEL` | | Model name the endpoint expects. |
 | `LOCAL_LLM_API_KEY` | | Bearer token if the endpoint needs one. |
 | `LOCAL_LLM_SYSTEM_PROMPT` | | System prompt for local replies. |
@@ -93,6 +106,9 @@ auth.
 | **llama.cpp** (`llama-server`) | `http://127.0.0.1:8080/v1` | any string | — |
 | **LiteLLM proxy** | `http://127.0.0.1:4000/v1` | the alias you configured | your proxy key |
 | **OpenAI (cloud)** | `https://api.openai.com/v1` | `gpt-4o-mini`, … | your OpenAI key |
+| **OpenRouter (cloud)** | `https://openrouter.ai/api/v1` | e.g. `openai/gpt-4o-mini` | your OpenRouter key |
+| **Gemini (cloud)** | `https://generativelanguage.googleapis.com/v1beta/openai` | a Gemini model id | your Gemini API key |
+| **None** | *(blank)* | — | — |
 
 Quick sanity check that a chosen endpoint works:
 
@@ -105,14 +121,28 @@ curl "$LOCAL_LLM_BASE_URL/chat/completions" \
 
 If that returns a JSON body with `choices[0].message.content`, the bot will work.
 
+## Claude-only mode
+
+Leave `LOCAL_LLM_BASE_URL` blank (`LOCAL_LLM_BASE_URL=` in the env file) when
+you have no LLM endpoint. Then:
+
+- Any message in a thread without a live session starts a Claude session, and
+  that message is handed to it as the first request (after the thread context).
+- If the session dies, the next message starts a new one instead of falling
+  back.
+- `local` / `로컬` ends the session; the next message starts a fresh one.
+
+`vllm_watchdog.py` is only for people serving their own vLLM; skip it
+otherwise.
+
 ## Running as a service
 
 - **launchd (macOS)** / **systemd --user (Linux)**: run `python -X utf8 bot.py`
   with the env file path in `HANDOFF_ENV_FILE`. Service managers have a minimal
   PATH — set `CLAUDE_BIN` to the absolute `claude` path so the handoff spawn
   doesn't silently fail.
-- Keep the bot on **one** machine (the one with `tmux` + `claude` + the local
-  endpoint). The spawned Claude sessions run on that same host.
+- Keep the bot on **one** machine (the one with `tmux` + `claude`, and the
+  local endpoint if you use one). The spawned Claude sessions run on that same host.
 
 ## Embedding the handoff layer in an existing bot
 
